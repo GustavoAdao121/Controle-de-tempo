@@ -673,60 +673,140 @@ with col3:
 st.divider()
 st.subheader("Últimos registros")
 
-registros_colab = df_registros[df_registros["Colaborador"].astype(str).str.strip() == colaborador].copy()
+registros_colab = df_registros[
+    df_registros["Colaborador"].astype(str).str.strip() == colaborador
+].copy()
 
 f1, f2, f3, f4 = st.columns([1, 1, 2, 2])
+
 with f1:
-    data_inicio = st.date_input("Data inicial", value=None, format="DD/MM/YYYY")
+    data_inicio = st.date_input(
+        "Data inicial",
+        value=None,
+        format="DD/MM/YYYY"
+    )
+
 with f2:
-    data_fim = st.date_input("Data final", value=None, format="DD/MM/YYYY")
+    data_fim = st.date_input(
+        "Data final",
+        value=None,
+        format="DD/MM/YYYY"
+    )
+
 with f3:
     empresas_registradas = ["Todas"] + opcoes_empresas_do_df(registros_colab)
-    empresa_filtro = st.selectbox("Filtrar empresa", empresas_registradas)
+
+    empresa_filtro = st.selectbox(
+        "Filtrar empresa",
+        empresas_registradas
+    )
+
 with f4:
-    st.caption("Além da lista, a tela mostra a soma total do tempo por empresa no período filtrado.")
+    st.caption(
+        "Os filtros abaixo afetam o total de horas e os registros exibidos."
+    )
 
-filtrados = aplicar_filtro_periodo(registros_colab, data_inicio, data_fim)
+filtrados = aplicar_filtro_periodo(
+    registros_colab,
+    data_inicio,
+    data_fim
+)
+
 if empresa_filtro != "Todas":
-    filtrados = filtrados[filtrados["Empresa"].astype(str).str.strip() == empresa_filtro]
-filtrados = filtrados.sort_values(by=["Data", "Início", "__linha"], ascending=[False, False, False], na_position="last")
+    filtrados = filtrados[
+        filtrados["Empresa"].astype(str).str.strip() == empresa_filtro
+    ]
 
+filtrados = filtrados.sort_values(
+    by=["Data", "Início", "__linha"],
+    ascending=[False, False, False],
+    na_position="last"
+)
+
+# MÉTRICAS CONTINUAM FUNCIONANDO
 k1, k2 = st.columns(2)
-k1.metric("Tempo total filtrado", total_geral_formatado(filtrados))
-k2.metric("Empresas no filtro", len(opcoes_empresas_do_df(filtrados)))
 
-st.markdown("#### Soma total por empresa")
-resumo_empresa_colab = resumo_por_empresa(filtrados)
-if resumo_empresa_colab.empty:
-    st.info("Sem totais por empresa para o período selecionado.")
-else:
-    st.dataframe(resumo_empresa_colab, hide_index=True, use_container_width=True)
+k1.metric(
+    "Tempo total filtrado",
+    total_geral_formatado(filtrados)
+)
+
+k2.metric(
+    "Empresas no filtro",
+    len(opcoes_empresas_do_df(filtrados))
+)
+
+# REMOVIDO:
+# "Soma total por empresa"
 
 if filtrados.empty:
     st.info("Sem registros para este colaborador no período selecionado.")
+
 else:
-    exibicao = filtrados[["__linha", "Data", "Motivo", "Empresa", "Início", "Fim", "Total", "Observação"]].copy()
+    exibicao = filtrados[
+        [
+            "__linha",
+            "Data",
+            "Motivo",
+            "Empresa",
+            "Início",
+            "Fim",
+            "Total",
+            "Observação",
+        ]
+    ].copy()
+
     edited = st.data_editor(
         exibicao,
         hide_index=True,
         use_container_width=True,
         disabled=["__linha", "Total"],
         column_config={
-            "__linha": st.column_config.NumberColumn("Linha", disabled=True),
-            "Data": st.column_config.TextColumn("Data"),
-            "Motivo": st.column_config.TextColumn("Motivo"),
-            "Empresa": st.column_config.TextColumn("Empresa"),
-            "Início": st.column_config.TextColumn("Início"),
-            "Fim": st.column_config.TextColumn("Fim"),
-            "Total": st.column_config.TextColumn("Total", disabled=True),
-            "Observação": st.column_config.TextColumn("Observação"),
+            "__linha": st.column_config.NumberColumn(
+                "Linha",
+                disabled=True
+            ),
+
+            "Data": st.column_config.TextColumn(
+                "Data"
+            ),
+
+            "Motivo": st.column_config.TextColumn(
+                "Motivo"
+            ),
+
+            "Empresa": st.column_config.TextColumn(
+                "Empresa",
+                width="large"
+            ),
+
+            "Início": st.column_config.TextColumn(
+                "Início"
+            ),
+
+            "Fim": st.column_config.TextColumn(
+                "Fim"
+            ),
+
+            "Total": st.column_config.TextColumn(
+                "Total",
+                disabled=True
+            ),
+
+            "Observação": st.column_config.TextColumn(
+                "Observação"
+            ),
         },
         key="editor_registros",
     )
 
     c1, c2 = st.columns([1, 1])
+
     with c1:
-        csv_bytes = gerar_csv_download(edited.drop(columns=["__linha"], errors="ignore"))
+        csv_bytes = gerar_csv_download(
+            edited.drop(columns=["__linha"], errors="ignore")
+        )
+
         st.download_button(
             "📥 Baixar CSV",
             data=csv_bytes,
@@ -734,27 +814,51 @@ else:
             mime="text/csv",
             use_container_width=True,
         )
+
     with c2:
-        if st.button("💾 Salvar alterações na planilha", use_container_width=True):
+        if st.button(
+            "💾 Salvar alterações na planilha",
+            use_container_width=True
+        ):
+
             erros = []
             atualizacoes = []
+
             for _, row in edited.iterrows():
+
                 linha = int(row["__linha"])
+
                 data_txt = str(row["Data"]).strip()
                 inicio_txt = str(row["Início"]).strip()
                 fim_txt = str(row["Fim"]).strip()
                 motivo_txt = str(row["Motivo"]).strip()
                 empresa_txt = str(row["Empresa"]).strip()
-                observacao_txt = str(row.get("Observação", "")).strip()
+
+                observacao_txt = str(
+                    row.get("Observação", "")
+                ).strip()
 
                 if not validar_data_br(data_txt):
-                    erros.append(f"Linha {linha}: data inválida. Use DD/MM/AAAA.")
-                if not validar_hora(inicio_txt):
-                    erros.append(f"Linha {linha}: início inválido. Use HH:MM:SS.")
-                if not validar_hora(fim_txt):
-                    erros.append(f"Linha {linha}: fim inválido. Use HH:MM:SS.")
+                    erros.append(
+                        f"Linha {linha}: data inválida. Use DD/MM/AAAA."
+                    )
 
-                total_txt = calcular_total(inicio_txt, fim_txt) if inicio_txt and fim_txt else ""
+                if not validar_hora(inicio_txt):
+                    erros.append(
+                        f"Linha {linha}: início inválido. Use HH:MM:SS."
+                    )
+
+                if not validar_hora(fim_txt):
+                    erros.append(
+                        f"Linha {linha}: fim inválido. Use HH:MM:SS."
+                    )
+
+                total_txt = (
+                    calcular_total(inicio_txt, fim_txt)
+                    if inicio_txt and fim_txt
+                    else ""
+                )
+
                 atualizacoes.extend([
                     {"range": f"B{linha}", "values": [[data_txt]]},
                     {"range": f"C{linha}", "values": [[motivo_txt]]},
@@ -768,7 +872,15 @@ else:
             if erros:
                 for erro in erros:
                     st.error(erro)
+
             else:
-                sheet.batch_update(atualizacoes, value_input_option="USER_ENTERED")
-                st.toast("✅ Alterações salvas na planilha com sucesso.")
+                sheet.batch_update(
+                    atualizacoes,
+                    value_input_option="USER_ENTERED"
+                )
+
+                st.toast(
+                    "✅ Alterações salvas na planilha com sucesso."
+                )
+
                 invalidar_cache_e_rerun()
