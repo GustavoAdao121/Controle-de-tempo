@@ -1,11 +1,13 @@
 import io
+import os
+import json
+import tempfile
 from datetime import datetime
 
 import gspread
 import pandas as pd
 import streamlit as st
 from google.oauth2.service_account import Credentials
-
 
 st.set_page_config(page_title="Controle de Tempo Online", layout="wide")
 
@@ -68,89 +70,106 @@ TIPOS_SUPORTE = [
 COLUNAS_PLANILHA = ["Colaborador", "Data", "Motivo", "Empresa", "Início", "Fim", "Total", "Observação"]
 
 
+# ── Persistência de login via arquivo temporário (F5 não desloga) ─────────────
+_LOGIN_FILE = os.path.join(tempfile.gettempdir(), "ct_login_state.txt")
 
+
+def cookie_get_usuario():
+    try:
+        if os.path.exists(_LOGIN_FILE):
+            with open(_LOGIN_FILE, "r", encoding="utf-8") as f:
+                valor = f.read().strip()
+            if valor in (COLABORADORES + ADMIN_USUARIOS):
+                return valor
+    except Exception:
+        pass
+    return None
+
+
+def cookie_set_usuario(nome):
+    try:
+        with open(_LOGIN_FILE, "w", encoding="utf-8") as f:
+            f.write(nome)
+    except Exception:
+        pass
+
+
+def cookie_remove_usuario():
+    try:
+        if os.path.exists(_LOGIN_FILE):
+            os.remove(_LOGIN_FILE)
+    except Exception:
+        pass
+
+
+# ── Empresas ──────────────────────────────────────────────────────────────────
 import re
 
 def carregar_empresas():
     try:
         with open("empresas.txt", "r", encoding="utf-8") as f:
             linhas = f.readlines()
-
         empresas = []
-
         for linha in linhas:
             linha = linha.strip()
             if not linha:
                 continue
-
-            # remove múltiplos espaços
             linha = re.sub(r"\s+", " ", linha)
-
-            # separa código
             partes = linha.split(" ", 1)
-
             if len(partes) > 1:
                 codigo = partes[0]
                 resto = partes[1]
-
-                # remove traços duplicados
                 resto = re.sub(r"-+", "-", resto)
-
-                # separa CNPJ
                 match = re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", resto)
-
                 if match:
                     cnpj = match.group()
-                    nome = resto.replace(cnpj, "").strip()
-
-                    # remove traços extras no nome
-                    nome = nome.strip(" -")
-
+                    nome = resto.replace(cnpj, "").strip().strip(" -")
                     empresas.append(f"{codigo} - {nome} - {cnpj}")
                 else:
                     nome = resto.strip(" -")
                     empresas.append(f"{codigo} - {nome}")
             else:
                 empresas.append(linha)
-
-        return sorted(set(empresas))  # remove duplicados
-
+        return sorted(set(empresas))
     except FileNotFoundError:
         return []
-
 
 
 EMPRESAS = carregar_empresas()
 
 
+# ── Planilha ──────────────────────────────────────────────────────────────────
 @st.cache_resource
 def conectar_planilha():
-    info = dict(st.secrets["gcp_service_account"])
+    # Streamlit Cloud usa st.secrets; Codespaces usa credentials.json.json local
+    try:
+        info = dict(st.secrets["gcp_service_account"])
+    except Exception:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        cred_path = os.path.join(base_dir, "credentials.json.json")
+        with open(cred_path, "r", encoding="utf-8") as f:
+            info = json.load(f)
     creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     client = gspread.authorize(creds)
     return client.open_by_url(SHEET_URL).sheet1
 
 
+# ── Utilitários ───────────────────────────────────────────────────────────────
 def agora():
     from zoneinfo import ZoneInfo
     return datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
 
-
 def data_str(dt):
     return dt.strftime("%d/%m/%Y")
-
 
 def hora_str(dt):
     return dt.strftime("%H:%M:%S")
 
-
 def login_ok(nome, senha):
     return nome in (COLABORADORES + ADMIN_USUARIOS) and senha == SENHA_PADRAO
 
-
 def usuario_eh_admin(nome):
     return nome in ADMIN_USUARIOS
-
 
 def calcular_total(inicio_texto, fim_texto):
     try:
@@ -167,7 +186,6 @@ def calcular_total(inicio_texto, fim_texto):
     except Exception:
         return ""
 
-
 def tempo_para_segundos(valor):
     try:
         texto = str(valor).strip()
@@ -181,7 +199,6 @@ def tempo_para_segundos(valor):
     except Exception:
         return 0
 
-
 def formatar_segundos(total_segundos):
     total_segundos = int(total_segundos or 0)
     horas = total_segundos // 3600
@@ -189,24 +206,20 @@ def formatar_segundos(total_segundos):
     segundos = total_segundos % 60
     return f"{horas:02d}:{minutos:02d}:{segundos:02d}"
 
-
 @st.cache_data(ttl=20)
 def obter_valores_planilha(_cache_buster=0):
     sheet = conectar_planilha()
     return sheet.get_all_values()
-
 
 def invalidar_cache_e_rerun():
     obter_valores_planilha.clear()
     st.session_state.cache_buster = st.session_state.get("cache_buster", 0) + 1
     st.rerun()
 
-
 def dataframe_registros(sheet, cache_buster=0):
     valores = obter_valores_planilha(cache_buster)
     if not valores:
         return pd.DataFrame(columns=["__linha"] + COLUNAS_PLANILHA)
-
     mapa_colunas = {
         "Motivo/tarefa em execução": "Motivo",
         "Motivo/Tarefa em execução": "Motivo",
@@ -215,7 +228,6 @@ def dataframe_registros(sheet, cache_buster=0):
         "Inicio": "Início",
     }
     header = [mapa_colunas.get(col.strip(), col.strip()) for col in valores[0]]
-
     linhas = []
     for idx, row in enumerate(valores[1:], start=2):
         row_preenchida = row + [""] * (len(header) - len(row))
@@ -224,11 +236,9 @@ def dataframe_registros(sheet, cache_buster=0):
             registro.setdefault(col, "")
         registro["__linha"] = idx
         linhas.append(registro)
-
     df = pd.DataFrame(linhas)
     cols = ["__linha"] + [c for c in COLUNAS_PLANILHA if c in df.columns]
     return df[cols]
-
 
 def preparar_df_com_totais(df):
     trabalho = df.copy()
@@ -236,7 +246,6 @@ def preparar_df_com_totais(df):
         trabalho["Total"] = ""
     trabalho["__total_segundos"] = trabalho["Total"].apply(tempo_para_segundos)
     return trabalho
-
 
 def resumo_por_empresa(df):
     if df.empty:
@@ -253,7 +262,6 @@ def resumo_por_empresa(df):
         ["Empresa", "Total gasto", "Registros"]
     ]
 
-
 def resumo_por_usuario(df):
     if df.empty:
         return pd.DataFrame(columns=["Usuário", "Total gasto", "Registros"])
@@ -269,25 +277,21 @@ def resumo_por_usuario(df):
         ["Usuário", "Total gasto", "Registros"]
     ]
 
-
 def total_geral_formatado(df):
     if df.empty:
         return "00:00:00"
     trabalho = preparar_df_com_totais(df)
     return formatar_segundos(trabalho["__total_segundos"].sum())
 
-
 def opcoes_empresas_do_df(df):
     if df.empty or "Empresa" not in df.columns:
         return []
     return sorted({str(x).strip() for x in df["Empresa"].fillna("") if str(x).strip()})
 
-
 def opcoes_usuarios_do_df(df):
     if df.empty or "Colaborador" not in df.columns:
         return []
     return sorted({str(x).strip() for x in df["Colaborador"].fillna("") if str(x).strip()})
-
 
 def procurar_tarefa_ativa(df, colaborador):
     if df.empty:
@@ -308,7 +312,6 @@ def procurar_tarefa_ativa(df, colaborador):
         "observacao": ultima.get("Observação", ""),
     }
 
-
 def finalizar_tarefa_ativa(sheet, df, colaborador, horario=None):
     ativa = procurar_tarefa_ativa(df, colaborador)
     if not ativa:
@@ -323,7 +326,6 @@ def finalizar_tarefa_ativa(sheet, df, colaborador, horario=None):
     ativa["fim"] = fim
     ativa["total"] = total
     return ativa
-
 
 def iniciar_tarefa(sheet, df, colaborador, empresa, motivo, observacao="", horario=None):
     momento = horario or agora()
@@ -340,7 +342,6 @@ def iniciar_tarefa(sheet, df, colaborador, empresa, motivo, observacao="", horar
     ]
     sheet.append_row(nova_linha, value_input_option="USER_ENTERED")
 
-
 def voltar_ultima_tarefa(sheet, df, colaborador):
     if df.empty:
         return False
@@ -349,16 +350,11 @@ def voltar_ultima_tarefa(sheet, df, colaborador):
     if registros.empty:
         return False
     ultima = registros.iloc[-1]
-    iniciar_tarefa(
-        sheet,
-        df,
-        colaborador,
-        str(ultima.get("Empresa", "")),
-        str(ultima.get("Motivo", "")),
-        str(ultima.get("Observação", "")),
-    )
+    iniciar_tarefa(sheet, df, colaborador,
+                   str(ultima.get("Empresa", "")),
+                   str(ultima.get("Motivo", "")),
+                   str(ultima.get("Observação", "")))
     return True
-
 
 def calcular_tempo_decorrido(inicio_texto):
     try:
@@ -368,11 +364,9 @@ def calcular_tempo_decorrido(inicio_texto):
         delta = atual - inicio_hoje
         if delta.total_seconds() < 0:
             return "00:00:00"
-        total_segundos = int(delta.total_seconds())
-        return formatar_segundos(total_segundos)
+        return formatar_segundos(int(delta.total_seconds()))
     except Exception:
         return "--:--:--"
-
 
 def validar_data_br(texto):
     try:
@@ -383,7 +377,6 @@ def validar_data_br(texto):
     except Exception:
         return False
 
-
 def validar_hora(texto):
     try:
         if not str(texto).strip():
@@ -392,7 +385,6 @@ def validar_hora(texto):
         return True
     except Exception:
         return False
-
 
 def aplicar_filtro_periodo(df, data_inicio, data_fim):
     if df.empty:
@@ -405,22 +397,16 @@ def aplicar_filtro_periodo(df, data_inicio, data_fim):
         trabalho = trabalho[trabalho["__data_dt"] <= pd.Timestamp(data_fim)]
     return trabalho.drop(columns=["__data_dt"], errors="ignore")
 
-
 def gerar_csv_download(df):
     export_df = df.drop(columns=["__linha"], errors="ignore").copy()
     return export_df.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
 
-
 def montar_motivo_suporte(tipo_suporte):
     return (tipo_suporte or "").strip() if tipo_suporte else "Suporte"
 
-
 def montar_observacao_suporte(suporte_para):
     destino = (suporte_para or "").strip()
-    if destino:
-        return f"Suporte {destino}"
-    return "Suporte"
-
+    return f"Suporte {destino}" if destino else "Suporte"
 
 def montar_motivo_final(motivo_base, suporte_para=None, tipo_suporte=None):
     if motivo_base == "Suporte":
@@ -428,6 +414,7 @@ def montar_motivo_final(motivo_base, suporte_para=None, tipo_suporte=None):
     return (motivo_base or "").strip()
 
 
+# ── Tela Admin ────────────────────────────────────────────────────────────────
 def render_tela_admin(df_registros):
     st.subheader("Painel do Administrador")
     st.caption("Acesso somente para leitura, filtros e relatórios.")
@@ -460,24 +447,14 @@ def render_tela_admin(df_registros):
         st.markdown("#### Total por empresa")
         resumo_empresa = resumo_por_empresa(filtrados)
         st.dataframe(resumo_empresa, hide_index=True, use_container_width=True)
-        st.download_button(
-            "📥 Baixar relatório por empresa",
-            data=gerar_csv_download(resumo_empresa),
-            file_name="relatorio_por_empresa.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
+        st.download_button("📥 Baixar relatório por empresa", data=gerar_csv_download(resumo_empresa),
+                           file_name="relatorio_por_empresa.csv", mime="text/csv", use_container_width=True)
     with r2:
         st.markdown("#### Total por usuário")
         resumo_usuario = resumo_por_usuario(filtrados)
         st.dataframe(resumo_usuario, hide_index=True, use_container_width=True)
-        st.download_button(
-            "📥 Baixar relatório por usuário",
-            data=gerar_csv_download(resumo_usuario),
-            file_name="relatorio_por_usuario.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
+        st.download_button("📥 Baixar relatório por usuário", data=gerar_csv_download(resumo_usuario),
+                           file_name="relatorio_por_usuario.csv", mime="text/csv", use_container_width=True)
 
     st.markdown("#### Registros filtrados")
     exibicao = filtrados[["Colaborador", "Data", "Motivo", "Empresa", "Início", "Fim", "Total", "Observação"]].copy()
@@ -486,30 +463,30 @@ def render_tela_admin(df_registros):
         st.info("Nenhum registro encontrado para os filtros selecionados.")
     else:
         st.dataframe(exibicao, hide_index=True, use_container_width=True)
-        st.download_button(
-            "📥 Baixar registros filtrados",
-            data=gerar_csv_download(exibicao),
-            file_name="registros_filtrados_admin.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
+        st.download_button("📥 Baixar registros filtrados", data=gerar_csv_download(exibicao),
+                           file_name="registros_filtrados_admin.csv", mime="text/csv", use_container_width=True)
 
 
+# ── App principal ─────────────────────────────────────────────────────────────
 sheet = None
 st.title("Controle de Tempo Online")
 
-if "usuario_logado" not in st.session_state:
-    st.session_state.usuario_logado = None
-if "ultimo_inicio" not in st.session_state:
-    st.session_state.ultimo_inicio = None
-if "em_intervalo" not in st.session_state:
-    st.session_state.em_intervalo = False
-if "empresa_antes_intervalo" not in st.session_state:
-    st.session_state.empresa_antes_intervalo = None
-if "motivo_antes_intervalo" not in st.session_state:
-    st.session_state.motivo_antes_intervalo = None
-if "obs_antes_intervalo" not in st.session_state:
-    st.session_state.obs_antes_intervalo = None
+for key, default in [
+    ("usuario_logado", None),
+    ("ultimo_inicio", None),
+    ("em_intervalo", False),
+    ("empresa_antes_intervalo", None),
+    ("motivo_antes_intervalo", None),
+    ("obs_antes_intervalo", None),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+# Restaura login pelo arquivo temporário (F5 não desloga)
+if st.session_state.usuario_logado is None:
+    usuario_salvo = cookie_get_usuario()
+    if usuario_salvo:
+        st.session_state.usuario_logado = usuario_salvo
 
 try:
     sheet = conectar_planilha()
@@ -524,18 +501,18 @@ with st.sidebar:
         st.success(f"Logado como {st.session_state.usuario_logado}")
         st.caption(f"Perfil: {perfil}")
         if st.button("Sair"):
+            cookie_remove_usuario()
             st.session_state.usuario_logado = None
             invalidar_cache_e_rerun()
     else:
-        # Formulário de login (Enter funciona aqui)
         with st.form("login_form"):
             nome_login = st.selectbox("Nome", COLABORADORES + ADMIN_USUARIOS, key="login_nome")
             senha_login = st.text_input("Senha", type="password", key="login_senha")
             entrar = st.form_submit_button("Entrar")
-
         if entrar:
             if login_ok(nome_login, senha_login):
                 st.session_state.usuario_logado = nome_login
+                cookie_set_usuario(nome_login)
                 invalidar_cache_e_rerun()
             else:
                 st.error("Nome ou senha inválidos.")
@@ -555,8 +532,7 @@ if e_admin:
 
 empresa = st.selectbox("Empresa", EMPRESAS)
 motivo_escolhido = st.selectbox(
-    "Motivo",
-    MOTIVOS_BASE,
+    "Motivo", MOTIVOS_BASE,
     help="💡 Digite qualquer parte do nome ou o número para filtrar — ex: 'Apuração', '629', 'retif'",
 )
 
@@ -568,16 +544,9 @@ if motivo_escolhido == "Outros":
     observacao = st.text_input("Descreva o motivo")
 elif motivo_escolhido == "Suporte":
     suporte_para_opcao = st.selectbox("Para quem é o suporte?", COLABORADORES + ["Outros"])
-    if suporte_para_opcao == "Outros":
-        suporte_para = st.text_input("Digite para quem é o suporte")
-    else:
-        suporte_para = suporte_para_opcao
-
+    suporte_para = st.text_input("Digite para quem é o suporte") if suporte_para_opcao == "Outros" else suporte_para_opcao
     tipo_suporte_opcao = st.selectbox("Qual é o motivo do suporte?", TIPOS_SUPORTE)
-    if tipo_suporte_opcao == "Outros":
-        tipo_suporte = st.text_input("Digite o motivo do suporte")
-    else:
-        tipo_suporte = tipo_suporte_opcao
+    tipo_suporte = st.text_input("Digite o motivo do suporte") if tipo_suporte_opcao == "Outros" else tipo_suporte_opcao
 
 motivo_final = montar_motivo_final(motivo_escolhido, suporte_para, tipo_suporte)
 if motivo_escolhido == "Suporte":
@@ -600,7 +569,6 @@ if ativa:
     st.session_state.empresa_antes_intervalo = None
     st.session_state.motivo_antes_intervalo = None
     st.session_state.obs_antes_intervalo = None
-
     st.markdown("### 🔴 EM EXECUÇÃO")
     st.success(f"Empresa: {ativa['empresa']}")
     st.info(f"Motivo: {ativa['motivo']}")
@@ -644,15 +612,15 @@ with col2:
 
     if st.button("🔁 Voltei", use_container_width=True):
         if st.session_state.em_intervalo and st.session_state.empresa_antes_intervalo:
-            empresa_retomar = st.session_state.empresa_antes_intervalo
-            motivo_retomar = st.session_state.motivo_antes_intervalo or ""
-            obs_retomar = st.session_state.obs_antes_intervalo or ""
-            iniciar_tarefa(sheet, df_registros, colaborador, empresa_retomar, motivo_retomar, obs_retomar)
+            iniciar_tarefa(sheet, df_registros, colaborador,
+                           st.session_state.empresa_antes_intervalo,
+                           st.session_state.motivo_antes_intervalo or "",
+                           st.session_state.obs_antes_intervalo or "")
             st.session_state.em_intervalo = False
             st.session_state.empresa_antes_intervalo = None
             st.session_state.motivo_antes_intervalo = None
             st.session_state.obs_antes_intervalo = None
-            st.toast(f"✅ Retomando: {empresa_retomar}")
+            st.toast("✅ Retomando tarefa anterior.")
         else:
             if voltar_ultima_tarefa(sheet, df_registros, colaborador):
                 st.toast("✅ Última tarefa retomada.")
@@ -673,192 +641,74 @@ with col3:
 st.divider()
 st.subheader("Últimos registros")
 
-registros_colab = df_registros[
-    df_registros["Colaborador"].astype(str).str.strip() == colaborador
-].copy()
+registros_colab = df_registros[df_registros["Colaborador"].astype(str).str.strip() == colaborador].copy()
 
-f1, f2, f3, f4 = st.columns([1, 1, 2, 2])
-
+f1, f2, f3 = st.columns([1, 1, 2])
 with f1:
-    data_inicio = st.date_input(
-        "Data inicial",
-        value=None,
-        format="DD/MM/YYYY"
-    )
-
+    data_inicio = st.date_input("Data inicial", value=None, format="DD/MM/YYYY")
 with f2:
-    data_fim = st.date_input(
-        "Data final",
-        value=None,
-        format="DD/MM/YYYY"
-    )
-
+    data_fim = st.date_input("Data final", value=None, format="DD/MM/YYYY")
 with f3:
     empresas_registradas = ["Todas"] + opcoes_empresas_do_df(registros_colab)
+    empresa_filtro = st.selectbox("Filtrar empresa", empresas_registradas)
 
-    empresa_filtro = st.selectbox(
-        "Filtrar empresa",
-        empresas_registradas
-    )
-
-with f4:
-    st.caption(
-        "Os filtros abaixo afetam o total de horas e os registros exibidos."
-    )
-
-filtrados = aplicar_filtro_periodo(
-    registros_colab,
-    data_inicio,
-    data_fim
-)
-
+filtrados = aplicar_filtro_periodo(registros_colab, data_inicio, data_fim)
 if empresa_filtro != "Todas":
-    filtrados = filtrados[
-        filtrados["Empresa"].astype(str).str.strip() == empresa_filtro
-    ]
-
-filtrados = filtrados.sort_values(
-    by=["Data", "Início", "__linha"],
-    ascending=[False, False, False],
-    na_position="last"
-)
-
-# MÉTRICAS CONTINUAM FUNCIONANDO
-k1, k2 = st.columns(2)
-
-k1.metric(
-    "Tempo total filtrado",
-    total_geral_formatado(filtrados)
-)
-
-k2.metric(
-    "Empresas no filtro",
-    len(opcoes_empresas_do_df(filtrados))
-)
-
-# REMOVIDO:
-# "Soma total por empresa"
+    filtrados = filtrados[filtrados["Empresa"].astype(str).str.strip() == empresa_filtro]
+filtrados = filtrados.sort_values(by=["Data", "Início", "__linha"], ascending=[False, False, False], na_position="last")
 
 if filtrados.empty:
     st.info("Sem registros para este colaborador no período selecionado.")
-
 else:
-    exibicao = filtrados[
-        [
-            "__linha",
-            "Data",
-            "Motivo",
-            "Empresa",
-            "Início",
-            "Fim",
-            "Total",
-            "Observação",
-        ]
-    ].copy()
-
+    exibicao = filtrados[["__linha", "Data", "Motivo", "Empresa", "Início", "Fim", "Total", "Observação"]].copy()
     edited = st.data_editor(
         exibicao,
         hide_index=True,
         use_container_width=True,
         disabled=["__linha", "Total"],
         column_config={
-            "__linha": st.column_config.NumberColumn(
-                "Linha",
-                disabled=True
-            ),
-
-            "Data": st.column_config.TextColumn(
-                "Data"
-            ),
-
-            "Motivo": st.column_config.TextColumn(
-                "Motivo"
-            ),
-
-            "Empresa": st.column_config.TextColumn(
-                "Empresa",
-                width="large"
-            ),
-
-            "Início": st.column_config.TextColumn(
-                "Início"
-            ),
-
-            "Fim": st.column_config.TextColumn(
-                "Fim"
-            ),
-
-            "Total": st.column_config.TextColumn(
-                "Total",
-                disabled=True
-            ),
-
-            "Observação": st.column_config.TextColumn(
-                "Observação"
-            ),
+            "__linha": st.column_config.NumberColumn("Linha", disabled=True),
+            "Data": st.column_config.TextColumn("Data"),
+            "Motivo": st.column_config.TextColumn("Motivo"),
+            "Empresa": st.column_config.TextColumn("Empresa", width="large"),
+            "Início": st.column_config.TextColumn("Início"),
+            "Fim": st.column_config.TextColumn("Fim"),
+            "Total": st.column_config.TextColumn("Total", disabled=True),
+            "Observação": st.column_config.TextColumn("Observação"),
         },
         key="editor_registros",
     )
 
     c1, c2 = st.columns([1, 1])
-
     with c1:
-        csv_bytes = gerar_csv_download(
-            edited.drop(columns=["__linha"], errors="ignore")
-        )
-
         st.download_button(
             "📥 Baixar CSV",
-            data=csv_bytes,
+            data=gerar_csv_download(edited.drop(columns=["__linha"], errors="ignore")),
             file_name=f"registros_{colaborador.lower()}.csv",
             mime="text/csv",
             use_container_width=True,
         )
-
     with c2:
-        if st.button(
-            "💾 Salvar alterações na planilha",
-            use_container_width=True
-        ):
-
+        if st.button("💾 Salvar alterações na planilha", use_container_width=True):
             erros = []
             atualizacoes = []
-
             for _, row in edited.iterrows():
-
                 linha = int(row["__linha"])
-
                 data_txt = str(row["Data"]).strip()
                 inicio_txt = str(row["Início"]).strip()
                 fim_txt = str(row["Fim"]).strip()
                 motivo_txt = str(row["Motivo"]).strip()
                 empresa_txt = str(row["Empresa"]).strip()
-
-                observacao_txt = str(
-                    row.get("Observação", "")
-                ).strip()
+                observacao_txt = str(row.get("Observação", "")).strip()
 
                 if not validar_data_br(data_txt):
-                    erros.append(
-                        f"Linha {linha}: data inválida. Use DD/MM/AAAA."
-                    )
-
+                    erros.append(f"Linha {linha}: data inválida. Use DD/MM/AAAA.")
                 if not validar_hora(inicio_txt):
-                    erros.append(
-                        f"Linha {linha}: início inválido. Use HH:MM:SS."
-                    )
-
+                    erros.append(f"Linha {linha}: início inválido. Use HH:MM:SS.")
                 if not validar_hora(fim_txt):
-                    erros.append(
-                        f"Linha {linha}: fim inválido. Use HH:MM:SS."
-                    )
+                    erros.append(f"Linha {linha}: fim inválido. Use HH:MM:SS.")
 
-                total_txt = (
-                    calcular_total(inicio_txt, fim_txt)
-                    if inicio_txt and fim_txt
-                    else ""
-                )
-
+                total_txt = calcular_total(inicio_txt, fim_txt) if inicio_txt and fim_txt else ""
                 atualizacoes.extend([
                     {"range": f"B{linha}", "values": [[data_txt]]},
                     {"range": f"C{linha}", "values": [[motivo_txt]]},
@@ -872,15 +722,7 @@ else:
             if erros:
                 for erro in erros:
                     st.error(erro)
-
             else:
-                sheet.batch_update(
-                    atualizacoes,
-                    value_input_option="USER_ENTERED"
-                )
-
-                st.toast(
-                    "✅ Alterações salvas na planilha com sucesso."
-                )
-
+                sheet.batch_update(atualizacoes, value_input_option="USER_ENTERED")
+                st.toast("✅ Alterações salvas na planilha com sucesso.")
                 invalidar_cache_e_rerun()
