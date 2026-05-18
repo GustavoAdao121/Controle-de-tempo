@@ -527,9 +527,13 @@ with st.sidebar:
             st.session_state.usuario_logado = None
             invalidar_cache_e_rerun()
     else:
-        nome_login = st.selectbox("Nome", COLABORADORES + ADMIN_USUARIOS, key="login_nome")
-        senha_login = st.text_input("Senha", type="password", key="login_senha")
-        if st.button("Entrar"):
+        # Formulário de login (Enter funciona aqui)
+        with st.form("login_form"):
+            nome_login = st.selectbox("Nome", COLABORADORES + ADMIN_USUARIOS, key="login_nome")
+            senha_login = st.text_input("Senha", type="password", key="login_senha")
+            entrar = st.form_submit_button("Entrar")
+
+        if entrar:
             if login_ok(nome_login, senha_login):
                 st.session_state.usuario_logado = nome_login
                 invalidar_cache_e_rerun()
