@@ -1,4 +1,3 @@
-
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -362,13 +361,22 @@ def voltar_ultima_tarefa(sheet, df, colaborador):
     return True
  
  
-def ultimo_protocolo_colaborador(df, colaborador):
+def ultimo_protocolo_colaborador(df, colaborador, empresa=None, motivo=None):
     if df.empty or "Protocolo" not in df.columns:
         return ""
+
     registros = df[df["Colaborador"].astype(str).str.strip() == colaborador]
     registros = registros[registros["Protocolo"].astype(str).str.strip() != ""]
+
+    # Filtra pela mesma empresa + motivo, mesmo que existam outras tarefas mais recentes
+    if empresa is not None:
+        registros = registros[registros["Empresa"].astype(str).str.strip() == str(empresa).strip()]
+    if motivo is not None:
+        registros = registros[registros["Motivo"].astype(str).str.strip() == str(motivo).strip()]
+
     if registros.empty:
         return ""
+
     registros = registros.sort_values(by="__linha")
     return str(registros.iloc[-1]["Protocolo"]).strip()
  
@@ -596,7 +604,7 @@ def dialog_protocolo(empresa_sel, motivo_sel, obs_sel, protocolo_anterior=""):
         invalidar_cache_e_rerun()
  
     if protocolo_anterior:
-        st.success(f"📋 Seu último protocolo foi **{protocolo_anterior}**.")
+        st.success(f"📋 Seu último protocolo **para esta empresa e motivo** foi **{protocolo_anterior}**.")
         st.write("Quer continuar com o mesmo protocolo anterior?")
         if st.button(
             f"🔁 Sim, continuar com {protocolo_anterior}",
@@ -706,7 +714,12 @@ with col1:
             st.warning("Preencha para quem é o suporte e o motivo do suporte.")
         else:
             # Abre a caixinha pedindo o protocolo. A tarefa só inicia após o OK.
-            protocolo_anterior = ultimo_protocolo_colaborador(df_registros, colaborador)
+            protocolo_anterior = ultimo_protocolo_colaborador(
+                df_registros,
+                colaborador,
+                empresa=str(empresa).strip(),
+                motivo=motivo_final,
+            )
             dialog_protocolo(str(empresa).strip(), motivo_final, observacao.strip(), protocolo_anterior)
  
 with col2:
