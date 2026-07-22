@@ -1,7 +1,11 @@
+import hashlib
+import hmac
 import re
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import extra_streamlit_components as stx
 import gspread
 import pandas as pd
 import streamlit as st
@@ -19,6 +23,10 @@ SCOPES = [
 COLABORADORES = ["Rodrigo dos Santos Soares", "Eliz Brugiolo", "Gustavo Silva", "Nathálie Carvalho", "Enrico Hilário", "Yara Neto", "Vivian Guimarães", "Dhayane Gomes", "Jennifer Benvindo"]
 ADMIN_USUARIOS = ["Administrador"]
 SENHA_PADRAO = "fisco121*"
+
+# --- Login persistente por navegador (cookie individual de cada usuário) ---
+COOKIE_NOME = "controle_tempo_login"
+COOKIE_DIAS_VALIDADE = 30  # cada pessoa fica logada por até 30 dias no navegador dela
 MOTIVOS_BASE = [
     "81 - Apuração de crédito para Estimativa – Não Previdenciária",
     "88 - Apuração de Crédito - Não Previdenciária",
@@ -148,6 +156,45 @@ def usuario_eh_admin(nome):
     return nome in ADMIN_USUARIOS
 
 
+def _segredo_auth():
+    """Chave secreta usada para assinar o cookie de login.
+
+    Configure em .streamlit/secrets.toml (auth_secret = "algo_bem_grande").
+    Se não existir, cai para a senha padrão como fallback.
+    """
+    try:
+        return str(st.secrets["auth_secret"])
+    except Exception:
+        return SENHA_PADRAO
+
+
+def gerar_token_login(nome):
+    """Cria um token assinado com o nome + validade. Assim o cookie não pode
+    ser forjado manualmente para impersonar outra pessoa."""
+    expira_em = int(time.time()) + COOKIE_DIAS_VALIDADE * 24 * 3600
+    base = f"{nome}|{expira_em}"
+    assinatura = hmac.new(_segredo_auth().encode(), base.encode(), hashlib.sha256).hexdigest()
+    return f"{base}|{assinatura}"
+
+
+def validar_token_login(token):
+    """Devolve o nome do usuário se o token for válido e não expirado; senão None."""
+    try:
+        nome, expira_txt, assinatura = str(token).rsplit("|", 2)
+        expira_em = int(expira_txt)
+        if expira_em < int(time.time()):
+            return None
+        base = f"{nome}|{expira_em}"
+        esperada = hmac.new(_segredo_auth().encode(), base.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(esperada, assinatura):
+            return None
+        if nome not in (COLABORADORES + ADMIN_USUARIOS):
+            return None
+        return nome
+    except Exception:
+        return None
+
+
 def calcular_total(inicio_texto, fim_texto):
     try:
         inicio = datetime.strptime(inicio_texto, "%H:%M:%S")
@@ -226,6 +273,41 @@ def dataframe_registros(sheet, cache_buster=0):
     df = pd.DataFrame(linhas)
     cols = ["__linha"] + [c for c in COLUNAS_PLANILHA if c in df.columns]
     return df[cols]
+
+
+def ordenar_por_data_desc(df):
+    """Ordena o DataFrame pela DATA real (mais recente primeiro).
+
+    A coluna 'Data' vem como texto no formato DD/MM/AAAA. Ordenar texto
+    coloca, por exemplo, 01/07 e 10/07 depois de 30/06 (porque compara
+    caractere a caractere). Aqui convertemos para data/hora reais antes de
+    ordenar, garantindo ordem cronológica correta. O desempate usa o horário
+    de início e, por fim, o número da linha.
+    """
+    if df.empty:
+        return df
+
+    trabalho = df.copy()
+    trabalho["__data_dt"] = pd.to_datetime(trabalho["Data"], format="%d/%m/%Y", errors="coerce")
+
+    if "Início" in trabalho.columns:
+        trabalho["__inicio_td"] = pd.to_timedelta(
+            trabalho["Início"].astype(str).str.strip(), errors="coerce"
+        )
+    else:
+        trabalho["__inicio_td"] = pd.NaT
+
+    colunas_ordenacao = ["__data_dt", "__inicio_td"]
+    if "__linha" in trabalho.columns:
+        colunas_ordenacao.append("__linha")
+
+    trabalho = trabalho.sort_values(
+        by=colunas_ordenacao,
+        ascending=[False] * len(colunas_ordenacao),
+        na_position="last",
+    )
+
+    return trabalho.drop(columns=["__data_dt", "__inicio_td"], errors="ignore")
 
 
 def preparar_df_com_totais(df):
@@ -504,7 +586,7 @@ def render_tela_admin(df_registros):
     exibicao = filtrados[
         ["Colaborador", "Data", "Motivo", "Empresa", "Início", "Fim", "Total", "Observação", "Protocolo"]
     ].copy()
-    exibicao = exibicao.sort_values(by=["Data", "Início"], ascending=[False, False], na_position="last")
+    exibicao = ordenar_por_data_desc(exibicao)
     if exibicao.empty:
         st.info("Nenhum registro encontrado para os filtros selecionados.")
     else:
@@ -542,6 +624,46 @@ except Exception as e:
     st.error(f"Erro ao conectar na planilha: {e}")
     st.stop()
 
+# Gerenciador de cookies: 1 instância por execução, com chave fixa.
+# O cookie é lido do navegador de cada pessoa, então NUNCA é compartilhado
+# entre usuários (foi isso que causava o bug de "logar todo mundo junto").
+cookie_manager = stx.CookieManager(key="cookie_manager")
+
+# Carrega os cookies deste navegador. Num F5 (sessão nova), na primeira passada
+# o componente ainda não respondeu e isto vem vazio; o Streamlit recarrega
+# sozinho e, na passada seguinte, o cookie de login já chega aqui.
+cookies_navegador = cookie_manager.get_all(key="cookie_get_all") or {}
+
+# Grava o cookie de login pendente FORA do rerun. Fazer set() logo antes de um
+# st.rerun() fazia o navegador não conseguir salvar (o cookie se perdia, e por
+# isso o F5 deslogava e o "Sair" dava KeyError).
+nome_para_salvar = st.session_state.get("_cookie_salvar")
+if nome_para_salvar:
+    cookie_manager.set(
+        COOKIE_NOME,
+        gerar_token_login(nome_para_salvar),
+        key="cookie_login",
+        expires_at=datetime.now() + timedelta(days=COOKIE_DIAS_VALIDADE),
+    )
+    st.session_state["_cookie_salvar"] = None
+
+# Apaga o cookie de logout pendente, também fora do rerun.
+if st.session_state.get("_cookie_apagar"):
+    try:
+        cookie_manager.delete(COOKIE_NOME, key="cookie_logout")
+    except KeyError:
+        pass  # o cookie já não existia neste navegador
+    cookies_navegador.pop(COOKIE_NOME, None)  # evita re-login pela leitura antiga
+    st.session_state["_cookie_apagar"] = False
+
+# Se esta sessão ainda não tem login, tenta restaurar pelo cookie do navegador.
+if not st.session_state.usuario_logado:
+    token_salvo = cookies_navegador.get(COOKIE_NOME)
+    if token_salvo:
+        nome_restaurado = validar_token_login(token_salvo)
+        if nome_restaurado:
+            st.session_state.usuario_logado = nome_restaurado
+
 with st.sidebar:
     st.subheader("Acesso")
     if st.session_state.usuario_logado:
@@ -550,6 +672,7 @@ with st.sidebar:
         st.caption(f"Perfil: {perfil}")
         if st.button("Sair"):
             st.session_state.usuario_logado = None
+            st.session_state["_cookie_apagar"] = True  # cookie apagado fora do rerun
             invalidar_cache_e_rerun()
     else:
         # Formulário de login (Enter funciona aqui)
@@ -561,6 +684,7 @@ with st.sidebar:
         if entrar:
             if login_ok(nome_login, senha_login):
                 st.session_state.usuario_logado = nome_login
+                st.session_state["_cookie_salvar"] = nome_login  # cookie gravado fora do rerun
                 invalidar_cache_e_rerun()
             else:
                 st.error("Nome ou senha inválidos.")
@@ -837,11 +961,7 @@ if empresa_filtro != "Todas":
         filtrados["Empresa"].astype(str).str.strip() == empresa_filtro
     ]
 
-filtrados = filtrados.sort_values(
-    by=["Data", "Início", "__linha"],
-    ascending=[False, False, False],
-    na_position="last"
-)
+filtrados = ordenar_por_data_desc(filtrados)
 
 # MÉTRICAS
 k1, k2 = st.columns(2)
