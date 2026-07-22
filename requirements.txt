@@ -1,4 +1,6 @@
 streamlit
-pandas
 gspread
+pandas
 google-auth
+extra-streamlit-components
+tzdata
