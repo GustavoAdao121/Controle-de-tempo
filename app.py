@@ -3,6 +3,7 @@ import hmac
 import re
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import extra_streamlit_components as stx
@@ -12,7 +13,80 @@ import streamlit as st
 from google.oauth2.service_account import Credentials
 
 
-st.set_page_config(page_title="Controle de Tempo Online", layout="wide")
+# --- Identidade visual (Grupo Fiscoplan) -----------------------------------
+# Os caminhos são resolvidos a partir da pasta deste arquivo, e não do
+# diretório de trabalho. No Streamlit Cloud / container os dois nem sempre
+# coincidem, e caminho relativo simples faz a logo sumir só em produção.
+BASE_DIR = Path(__file__).resolve().parent
+ASSETS = BASE_DIR / "assets"
+
+LOGO_CLARA = ASSETS / "logo_fiscoplan.png"
+LOGO_ESCURA = ASSETS / "logo_fiscoplan_dark.png"
+ICONE = ASSETS / "icone_fiscoplan.png"
+
+
+def caminho_ativo(arquivo, alternativa=None):
+    """Devolve o caminho como texto se o arquivo existir; senão a alternativa.
+
+    Evita que a ausência de um PNG derrube o app inteiro com FileNotFoundError.
+    """
+    if arquivo and Path(arquivo).is_file():
+        return str(arquivo)
+    if alternativa and Path(alternativa).is_file():
+        return str(alternativa)
+    return None
+
+
+def tema_escuro():
+    """Detecta se o usuário está no tema escuro, para escolher a variante da logo.
+
+    st.context.theme só existe em versões recentes do Streamlit; por isso o
+    fallback para a configuração do tema e, por último, para o tema claro.
+    """
+    try:
+        return st.context.theme.type == "dark"
+    except Exception:
+        pass
+    try:
+        return (st.get_option("theme.base") or "light") == "dark"
+    except Exception:
+        return False
+
+
+st.set_page_config(
+    page_title="Fiscotime",
+    page_icon=caminho_ativo(ICONE) or "⏱️",
+    layout="wide",
+)
+
+
+def aplicar_marca():
+    """Fixa a logo no topo da sidebar (acima do bloco de Acesso).
+
+    st.logo exige Streamlit >= 1.35 e o parâmetro size >= 1.42. Quando a
+    versão do ambiente for anterior, cai para st.image dentro da sidebar.
+    """
+    logo = caminho_ativo(LOGO_ESCURA if tema_escuro() else LOGO_CLARA, LOGO_CLARA)
+    if not logo:
+        return
+
+    icone = caminho_ativo(ICONE)
+    try:
+        st.logo(logo, icon_image=icone, size="large")
+    except TypeError:
+        try:
+            st.logo(logo, icon_image=icone)
+        except Exception:
+            with st.sidebar:
+                st.image(logo, use_container_width=True)
+                st.divider()
+    except Exception:
+        with st.sidebar:
+            st.image(logo, use_container_width=True)
+            st.divider()
+
+
+aplicar_marca()
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1UO8OsNELTVsK6l4Gp7vow7ccPwn7uBHu-y_wYgwb8hE/edit?gid=0#gid=0"
 SCOPES = [
@@ -531,6 +605,33 @@ def montar_motivo_final(motivo_base, suporte_para=None, tipo_suporte=None):
     return (motivo_base or "").strip()
 
 
+def render_cabecalho():
+    """Nome da aplicação no topo, sem imagem.
+
+    A marca Fiscoplan já aparece na sidebar via st.logo. Repetir o símbolo
+    aqui competia com o nome da aplicação, então o topo carrega só o nome.
+
+    Para centralizar, troque text-align:left por center nas duas linhas
+    marcadas abaixo.
+    """
+    st.markdown(
+        """
+        <div style="text-align:left; margin:.2rem 0 1.6rem;">
+          <h1 style="margin:0; padding:0; font-size:2.6rem; font-weight:700;
+                     letter-spacing:-.02em; line-height:1.1;">
+            Fiscotime
+          </h1>
+          <p style="margin:.35rem 0 0; padding:0; text-align:left;
+                    font-size:.82rem; font-weight:500; letter-spacing:.14em;
+                    text-transform:uppercase; opacity:.55;">
+            Controle de tempo
+          </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_tela_admin(df_registros):
     st.subheader("Painel do Administrador")
     st.caption("Acesso somente para leitura, filtros e relatórios.")
@@ -601,7 +702,7 @@ def render_tela_admin(df_registros):
 
 
 sheet = None
-st.title("Controle de Tempo Online")
+render_cabecalho()
 
 if "usuario_logado" not in st.session_state:
     st.session_state.usuario_logado = None
