@@ -1,0 +1,7 @@
+[theme]
+# Cores extraídas da logo oficial da Fiscoplan.
+primaryColor = "#0048F0"              # azul do símbolo Fiscoplan
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F1F4FB"  # fundo de sidebar, tabelas e inputs
+textColor = "#1A1A1A"                 # preto do wordmark "Fiscoplan"
+font = "sans serif"
