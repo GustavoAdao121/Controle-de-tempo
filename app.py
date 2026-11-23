@@ -94,7 +94,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-COLABORADORES = [ "Eliz Brugiolo", "Nathálie Carvalho", "Enrico Hilário", "Lívia Damasceno", "Dhayane Gomes"]
+COLABORADORES = [ "Eliz Brugiolo", "Nathálie Carvalho", "Enrico Hilário", "Lívia Damasceno", "Dhayane Gomes", "Marinaldo Juvenal", "Danielle Verpel", "Paula Luana"]
 ADMIN_USUARIOS = ["Administrador"]
 SENHA_PADRAO = "fisco121*"
 
